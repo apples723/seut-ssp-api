@@ -1,0 +1,30 @@
+# Virtual environment (dependencies installed fresh in container)
+.venv/
+venv/
+
+# Data (mounted via volume, not baked into image)
+data/
+*.db
+
+# Version control
+.git/
+
+# Tests (not needed in production image)
+tests/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.*
+
+# Test artifacts
+.pytest_cache/
+.hypothesis/
+htmlcov/
+
+# Docs
+*.md

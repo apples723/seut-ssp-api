@@ -1,0 +1,21 @@
+services:
+  api:
+    build:
+      context: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-admin}
+      - TIMER_ENABLED=${TIMER_ENABLED:-true}
+      - DB_PATH=/app/data/sessions.db
+      - RELEASE_VERSION=${RELEASE_VERSION:-dev}
+      - BUILD_ENV=${BUILD_ENV:-dev}
+    ports:
+      - "80:8000"
+    networks:
+      - ssp
+
+networks:
+  ssp:
+    external: true

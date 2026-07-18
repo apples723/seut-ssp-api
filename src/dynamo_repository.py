@@ -957,6 +957,7 @@ class DynamoRepository:
         voter_type_id: Optional[str] = None,
         voter_type_name: Optional[str] = None,
         assigned_role_name: Optional[str] = None,
+        assigned_role_id: Optional[str] = None,
         role_type: Optional[str] = None,
         role_description: Optional[str] = None,
         private_info: Optional[str] = None,
@@ -974,6 +975,7 @@ class DynamoRepository:
         if assigned_role_name is None:
             if role == "player":
                 assigned_role_name = None
+                assigned_role_id = None
                 role_type = "Player"
                 role_description = None
                 private_info = None
@@ -993,6 +995,7 @@ class DynamoRepository:
             name=name,
             role=role,
             assigned_role_name=assigned_role_name,
+            assigned_role_id=assigned_role_id,
             role_type=role_type,
             role_description=role_description,
             private_info=private_info,
@@ -1035,6 +1038,7 @@ class DynamoRepository:
         role_description: str,
         private_info: Optional[str],
         session_code: str,
+        assigned_role_id: Optional[str] = None,
     ) -> bool:
         """Update a participant's scenario role assignment."""
         pk = session_pk(session_code)
@@ -1043,10 +1047,11 @@ class DynamoRepository:
         try:
             self._session_table.update_item(
                 Key={"PK": pk, "SK": sk},
-                UpdateExpression="SET assignedRoleName = :rn, roleDescription = :rd, privateInfo = :pi",
+                UpdateExpression="SET assignedRoleName = :rn, assignedRoleId = :ri, roleDescription = :rd, privateInfo = :pi",
                 ConditionExpression="attribute_exists(PK)",
                 ExpressionAttributeValues={
                     ":rn": assigned_role_name,
+                    ":ri": assigned_role_id,
                     ":rd": role_description,
                     ":pi": private_info,
                 },

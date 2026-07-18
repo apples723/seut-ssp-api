@@ -13,6 +13,7 @@ def _participant_dict(participant) -> Dict[str, Any]:
         'name': participant.name,
         'role': participant.role,
         'assignedRoleName': participant.assigned_role_name,
+        'assignedRoleId': getattr(participant, 'assigned_role_id', None),
         'roleType': participant.role_type,
         'roleDescription': participant.role_description,
         'privateInfo': participant.private_info,
@@ -155,6 +156,7 @@ def _claim_new_role(session_code, session, role_pin_record, participant_name, ro
     participant = repo.add_participant(
         session_code, participant_name, role, ip_address,
         assigned_role_name=role_pin_record.role_name,
+        assigned_role_id=role_pin_record.role_id,
         role_type='player',
         role_description=role_description,
         private_info=private_info,
@@ -300,6 +302,7 @@ def select_role(event: Dict[str, Any]) -> Dict[str, Any]:
         role_description=role_data.get('description', ''),
         private_info=role_data.get('privateInfo'),
         session_code=session_code,
+        assigned_role_id=role_id,
     )
     if not updated:
         return response(500, {'ok': False, 'message': 'Failed to update role.'})
@@ -344,6 +347,7 @@ def assign_player_role(event: Dict[str, Any]) -> Dict[str, Any]:
         role_description=role_data.get('description', ''),
         private_info=role_data.get('privateInfo'),
         session_code=session_code,
+        assigned_role_id=role_id,
     )
     if not updated:
         return response(500, {'ok': False, 'message': 'Failed to assign role.'})

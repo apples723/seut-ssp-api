@@ -114,6 +114,7 @@ class RepositoryProtocol(Protocol):
         role_description: str,
         private_info: Optional[str],
         session_code: str,
+        assigned_role_id: Optional[str] = None,
     ) -> bool:
         """Update a participant's scenario role assignment."""
         ...

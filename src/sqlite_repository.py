@@ -130,6 +130,7 @@ class SqliteRepository:
                 name TEXT,
                 role TEXT,
                 assigned_role_name TEXT,
+                assigned_role_id TEXT,
                 role_type TEXT,
                 role_description TEXT,
                 private_info TEXT,
@@ -342,6 +343,11 @@ class SqliteRepository:
         if 'voter_type_name' not in participant_columns:
             print("Migration: Adding voter_type_name column to participants table")
             cursor.execute('ALTER TABLE participants ADD COLUMN voter_type_name TEXT')
+            self.conn.commit()
+
+        if 'assigned_role_id' not in participant_columns:
+            print("Migration: Adding assigned_role_id column to participants table")
+            cursor.execute('ALTER TABLE participants ADD COLUMN assigned_role_id TEXT')
             self.conn.commit()
 
         # Check votes table for voter type columns
@@ -666,7 +672,9 @@ class SqliteRepository:
         cursor.execute('SELECT * FROM participants WHERE session_id = ?', (session_id,))
         participants = [Participant(
             id=p['id'], name=p['name'], role=p['role'],
-            assigned_role_name=p['assigned_role_name'], role_type=p['role_type'],
+            assigned_role_name=p['assigned_role_name'],
+            assigned_role_id=p['assigned_role_id'] if 'assigned_role_id' in p.keys() else None,
+            role_type=p['role_type'],
             role_description=p['role_description'], private_info=p['private_info'],
             ip_address=p['ip_address'], joined_at=p['joined_at'],
             voter_type_id=p['voter_type_id'] if 'voter_type_id' in p.keys() else None,
@@ -961,7 +969,8 @@ class SqliteRepository:
 
     def add_participant(self, session_code: str, name: str, role: str, ip_address: Optional[str] = None,
                         voter_type_id: Optional[str] = None, voter_type_name: Optional[str] = None,
-                        assigned_role_name: Optional[str] = None, role_type: Optional[str] = None,
+                        assigned_role_name: Optional[str] = None, assigned_role_id: Optional[str] = None,
+                        role_type: Optional[str] = None,
                         role_description: Optional[str] = None, private_info: Optional[str] = None) -> Participant:
         """Add a participant to a session and return the participant object.
         
@@ -980,6 +989,7 @@ class SqliteRepository:
             # Facilitators and viewers get their system-level role info immediately.
             if role == 'player':
                 assigned_role_name = None
+                assigned_role_id = None
                 role_type = 'Player'
                 role_description = None
                 private_info = None
@@ -998,9 +1008,9 @@ class SqliteRepository:
         try:
             cursor.execute('BEGIN TRANSACTION')
             cursor.execute('''
-                INSERT INTO participants (id, session_id, name, role, assigned_role_name, role_type, role_description, private_info, ip_address, joined_at, voter_type_id, voter_type_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (participant_id, session_code, name, role, assigned_role_name, role_type,
+                INSERT INTO participants (id, session_id, name, role, assigned_role_name, assigned_role_id, role_type, role_description, private_info, ip_address, joined_at, voter_type_id, voter_type_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (participant_id, session_code, name, role, assigned_role_name, assigned_role_id, role_type,
                   role_description, private_info, ip_address, now, voter_type_id, voter_type_name))
             self.conn.commit()
         except Exception:
@@ -1012,7 +1022,8 @@ class SqliteRepository:
         
         return Participant(
             id=participant_id, name=name, role=role,
-            assigned_role_name=assigned_role_name, role_type=role_type,
+            assigned_role_name=assigned_role_name, assigned_role_id=assigned_role_id,
+            role_type=role_type,
             role_description=role_description, private_info=private_info,
             ip_address=ip_address, joined_at=now,
             voter_type_id=voter_type_id, voter_type_name=voter_type_name,
@@ -1052,7 +1063,9 @@ class SqliteRepository:
         cursor.execute('SELECT * FROM participants WHERE session_id = ?', (session_code,))
         return [Participant(
             id=p['id'], name=p['name'], role=p['role'],
-            assigned_role_name=p['assigned_role_name'], role_type=p['role_type'],
+            assigned_role_name=p['assigned_role_name'],
+            assigned_role_id=p['assigned_role_id'] if 'assigned_role_id' in p.keys() else None,
+            role_type=p['role_type'],
             role_description=p['role_description'], private_info=p['private_info'],
             ip_address=p['ip_address'], joined_at=p['joined_at'],
             voter_type_id=p['voter_type_id'] if 'voter_type_id' in p.keys() else None,
@@ -1061,13 +1074,13 @@ class SqliteRepository:
 
     def update_participant_role(self, participant_id: str, assigned_role_name: str,
                                 role_description: str, private_info: Optional[str],
-                                session_code: str) -> bool:
+                                session_code: str, assigned_role_id: Optional[str] = None) -> bool:
         """Update a participant's scenario role assignment."""
         cursor = self.conn.cursor()
         cursor.execute('''
-            UPDATE participants SET assigned_role_name = ?, role_description = ?, private_info = ?
+            UPDATE participants SET assigned_role_name = ?, assigned_role_id = ?, role_description = ?, private_info = ?
             WHERE id = ? AND session_id = ?
-        ''', (assigned_role_name, role_description, private_info, participant_id, session_code))
+        ''', (assigned_role_name, assigned_role_id, role_description, private_info, participant_id, session_code))
         self.conn.commit()
         if cursor.rowcount > 0:
             self._bump_version(session_code)
@@ -2068,11 +2081,11 @@ class SqliteRepository:
             
             # Create new participant with the role assignment
             cursor.execute('''
-                INSERT INTO participants (id, session_id, name, role, assigned_role_name, 
+                INSERT INTO participants (id, session_id, name, role, assigned_role_name, assigned_role_id,
                     role_type, role_description, private_info, ip_address, joined_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (new_participant_id, session_code, new_participant_name, 'player',
-                  role_name, 'player', role_description, private_info, ip_address, now))
+                  role_name, role_id, 'player', role_description, private_info, ip_address, now))
             
             # Update role_pins claim fields
             cursor.execute('''
@@ -2093,6 +2106,7 @@ class SqliteRepository:
             name=new_participant_name,
             role='player',
             assigned_role_name=role_name,
+            assigned_role_id=role_id,
             role_type='player',
             role_description=role_description,
             private_info=private_info,

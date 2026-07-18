@@ -61,6 +61,7 @@ def claim_role_with_pin(event: Dict[str, Any]) -> Dict[str, Any]:
             role_description=role_description,
             private_info=private_info,
             session_code=session_code,
+            assigned_role_id=role_pin_record.role_id,
         )
 
         repo.claim_role_pin(session_code, role_pin_record.role_id, participant_id, participant.name)
@@ -92,6 +93,7 @@ def claim_role_with_pin(event: Dict[str, Any]) -> Dict[str, Any]:
             role_description=role_description,
             private_info=private_info,
             session_code=session_code,
+            assigned_role_id=role_pin_record.role_id,
         )
 
         repo.claim_role_pin(session_code, role_pin_record.role_id, participant_id, participant.name)

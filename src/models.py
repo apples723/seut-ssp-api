@@ -103,6 +103,7 @@ class Participant:
     name: str
     role: str
     assigned_role_name: Optional[str] = None
+    assigned_role_id: Optional[str] = None
     role_type: Optional[str] = None
     role_description: Optional[str] = None
     private_info: Optional[str] = None
@@ -219,6 +220,7 @@ class Session:
                 'id': self.participant.id,
                 'name': self.participant.name,
                 'role': self.participant.role,
+                'assignedRoleId': self.participant.assigned_role_id,
                 'assignedRoleName': self.participant.assigned_role_name,
                 'roleType': self.participant.role_type,
                 'roleDescription': self.participant.role_description,
@@ -285,6 +287,7 @@ class Session:
                     'name': p.name,
                     'role': p.role,
                     'assignedRoleName': p.assigned_role_name,
+                    'assignedRoleId': p.assigned_role_id,
                     'voterTypeId': p.voter_type_id,
                     'voterTypeName': p.voter_type_name,
                 }

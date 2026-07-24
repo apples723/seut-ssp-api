@@ -45,7 +45,10 @@ from src.service import (
     vote_on_response,
     control_voting,
     facilitator_remove_vote,
+    facilitator_remove_response,
     retract_vote,
+    get_session_voter_types,
+    get_vote_summary_by_voter_type,
     submit_engineer_sprint_vote,
     submit_stakeholder_sprint_vote,
     submit_head_to_head_vote,
@@ -54,6 +57,9 @@ from src.service import (
     get_session_scores,
     facilitator_reveal_scores,
     facilitator_toggle_scoreboard,
+    claim_role_with_pin,
+    get_role_pins,
+    admin_get_session_pins,
 )
 from src.sqlite_repository import repo
 
@@ -142,6 +148,25 @@ class APIHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self._send_response(get_session_roles(code.strip().upper()))
+        elif path == '/session/voter-types':
+            code = query.get('code', [None])[0]
+            event = {'queryStringParameters': {'code': code or ''}}
+            self._send_response(get_session_voter_types(event))
+        elif path == '/facilitator/role-pins':
+            code = query.get('code', [None])[0]
+            pid = query.get('pid', [None])[0]
+            event = {
+                'queryStringParameters': {'code': code or '', 'pid': pid or ''},
+                'headers': {k: v for k, v in self.headers.items()},
+            }
+            self._send_response(get_role_pins(event))
+        elif path == '/admin/session-pins':
+            code = query.get('code', [None])[0]
+            event = {
+                'queryStringParameters': {'code': code or ''},
+                'headers': {k: v for k, v in self.headers.items()},
+            }
+            self._send_response(admin_get_session_pins(event))
         elif path == '/version':
             self._send_response(self._get_version())
         elif path == '/admin/buildinfo':
@@ -341,6 +366,8 @@ class APIHandler(BaseHTTPRequestHandler):
             result = control_voting(event)
         elif path == '/facilitator/remove-vote':
             result = facilitator_remove_vote(event)
+        elif path == '/facilitator/remove-response':
+            result = facilitator_remove_response(event)
         elif path == '/retract-vote':
             result = retract_vote(event)
         elif path == '/sprint/engineer-vote':
@@ -359,6 +386,10 @@ class APIHandler(BaseHTTPRequestHandler):
             result = facilitator_reveal_scores(event)
         elif path == '/facilitator/toggle-scoreboard':
             result = facilitator_toggle_scoreboard(event)
+        elif path == '/session/claim-role':
+            result = claim_role_with_pin(event)
+        elif path == '/vote/summary-by-voter-type':
+            result = get_vote_summary_by_voter_type(event)
         else:
             self.send_error(404)
             return

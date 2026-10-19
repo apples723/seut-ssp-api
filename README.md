@@ -44,7 +44,9 @@ docker network create ssp
 docker compose up --build
 ```
 
-Exposes the API at port 8000 on the `ssp` network. The web container (from `ssp-web`) proxies to `http://api:8000`.
+The Compose service is deliberately named `api`, establishing the default Docker DNS endpoint `api:8000` on the shared `ssp` network. The web container (from `ssp-web`) uses that value as its default `API_UPSTREAM`.
+
+Docker-network and host access are independent: containers use the service name and container port (`api:8000`), while a `ports` mapping controls direct host access. For example, `8051:8000` publishes the same API at `http://localhost:8051` without changing the web container's upstream.
 
 ### Running Tests
 

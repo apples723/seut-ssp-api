@@ -2231,14 +2231,14 @@ class DynamoRepository:
     def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str] = None) -> TutorialVersion:
         return self._tutorial_repo.create_tutorial(config, created_by)
 
-    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_revision: int,
                         created_by: Optional[str] = None) -> Optional[TutorialVersion]:
-        return self._tutorial_repo.update_tutorial(tutorial_id, config, expected_version, created_by)
+        return self._tutorial_repo.update_tutorial(tutorial_id, config, expected_revision, created_by)
 
     def publish_tutorial(self, tutorial_id: str, version: int,
-                         expected_version: int) -> Optional[TutorialVersion]:
-        return self._tutorial_repo.publish_tutorial(tutorial_id, version, expected_version)
+                         expected_revision: int) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.publish_tutorial(tutorial_id, version, expected_revision)
 
     def disable_tutorial(self, tutorial_id: str,
-                         expected_version: int) -> Optional[TutorialVersion]:
-        return self._tutorial_repo.disable_tutorial(tutorial_id, expected_version)
+                         expected_revision: int) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.disable_tutorial(tutorial_id, expected_revision)

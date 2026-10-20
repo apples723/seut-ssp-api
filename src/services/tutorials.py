@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from ..repository_factory import repo
 from ..tutorial_repository import (
+    TUTORIAL_MAX_ID_BYTES,
     TutorialAlreadyExistsError,
     TutorialConflictError,
     TutorialValidationError,
@@ -50,6 +51,12 @@ def _tutorial_id(body: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str
     if not isinstance(value, str) or not value.strip():
         return None, _field_error("tutorialId", "Must be a non-empty string.", "nonempty_string")
     value = value.strip()
+    try:
+        value_size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None, _field_error("tutorialId", "Must contain valid Unicode.", "invalid_unicode")
+    if value_size > TUTORIAL_MAX_ID_BYTES:
+        return None, _field_error("tutorialId", f"Must be at most {TUTORIAL_MAX_ID_BYTES} UTF-8 bytes.", "max_bytes")
     if "#" in value:
         return None, _field_error("tutorialId", "Must not contain '#'.", "invalid_id")
     return value, None
@@ -59,7 +66,14 @@ def _created_by(body: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str,
     value = body.get("createdBy", "admin")
     if not isinstance(value, str) or not value.strip():
         return None, _field_error("createdBy", "Must be a non-empty string.", "nonempty_string")
-    return value.strip(), None
+    value = value.strip()
+    try:
+        value_size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None, _field_error("createdBy", "Must contain valid Unicode.", "invalid_unicode")
+    if value_size > 256:
+        return None, _field_error("createdBy", "Must be at most 256 UTF-8 bytes.", "max_bytes")
+    return value, None
 
 
 def _integer(body: Dict[str, Any], field: str, required: bool = True) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
@@ -89,8 +103,8 @@ def _config(body: Dict[str, Any], tutorial_id: Optional[str] = None) -> Tuple[Op
 def _conflict(error: TutorialConflictError) -> Dict[str, Any]:
     return response(409, {
         "ok": False,
-        "message": "expectedVersion is stale.",
-        "currentVersion": error.current_version,
+        "message": "expectedRevision is stale.",
+        "currentRevision": error.current_revision,
     })
 
 
@@ -102,6 +116,12 @@ def get_tutorial_config(event: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     if not isinstance(tutorial_id, str) or not tutorial_id.strip():
         return _field_error("id", "Must be a non-empty string.", "nonempty_string")
     tutorial_id = tutorial_id.strip()
+    try:
+        tutorial_id_size = len(tutorial_id.encode("utf-8"))
+    except UnicodeEncodeError:
+        return _field_error("id", "Must contain valid Unicode.", "invalid_unicode")
+    if tutorial_id_size > TUTORIAL_MAX_ID_BYTES:
+        return _field_error("id", f"Must be at most {TUTORIAL_MAX_ID_BYTES} UTF-8 bytes.", "max_bytes")
     if "#" in tutorial_id:
         return _field_error("id", "Must not contain '#'.", "invalid_id")
     tutorial = repo.get_published_tutorial(tutorial_id)
@@ -186,7 +206,7 @@ def admin_update_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     tutorial_id, error = _tutorial_id(body)
     if error:
         return error
-    expected, error = _integer(body, "expectedVersion")
+    expected, error = _integer(body, "expectedRevision")
     if error:
         return error
     config, error = _config(body, tutorial_id)
@@ -248,15 +268,15 @@ def admin_import_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     if not current:
         return response(200, {
             "ok": True, "action": "create", "tutorialId": tutorial_id,
-            "config": config, "expectedVersion": 0,
+            "config": config, "expectedRevision": 0,
             "diff": {"tutorialId": tutorial_id, "hasChanges": True,
                      "changes": [{"path": "config", "type": "added", "new": config}]},
         })
     changes = recursive_diff(current.config, config)
     return response(200, {
         "ok": True, "action": "update", "tutorialId": tutorial_id,
-        "config": config, "expectedVersion": current.version,
-        "existingVersion": current.version,
+        "config": config, "expectedRevision": current.revision,
+        "existingVersion": current.version, "existingRevision": current.revision,
         "diff": {"tutorialId": tutorial_id, "fromVersion": current.version,
                  "hasChanges": bool(changes), "changes": changes},
     })
@@ -272,7 +292,7 @@ def admin_publish_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     tutorial_id, error = _tutorial_id(body)
     if error:
         return error
-    expected, error = _integer(body, "expectedVersion")
+    expected, error = _integer(body, "expectedRevision")
     if error:
         return error
     version, error = _integer(body, "version", required=False)
@@ -306,7 +326,7 @@ def admin_disable_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     tutorial_id, error = _tutorial_id(body)
     if error:
         return error
-    expected, error = _integer(body, "expectedVersion")
+    expected, error = _integer(body, "expectedRevision")
     if error:
         return error
     try:

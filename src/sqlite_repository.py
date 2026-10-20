@@ -40,11 +40,24 @@ class SqliteRepository:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.conn.execute('PRAGMA foreign_keys = ON')  # Enforce foreign key constraints
+        self.conn.execute('PRAGMA busy_timeout = 5000')
         self.conn.row_factory = sqlite3.Row
+
+        # Tutorial lifecycle writes use explicit transactions. Keep them on a
+        # dedicated connection so commits in session/scenario/voting code cannot
+        # cross those transaction boundaries.
+        if DB_PATH == ':memory:':
+            tutorial_conn = self.conn
+        else:
+            tutorial_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            tutorial_conn.execute('PRAGMA foreign_keys = ON')
+            tutorial_conn.execute('PRAGMA busy_timeout = 5000')
+            tutorial_conn.row_factory = sqlite3.Row
+        self._tutorial_conn = tutorial_conn
         
         # Initialize sub-repositories
         self.scenarios = ScenarioRepository(self.conn)
-        self.tutorials = TutorialRepository(self.conn)
+        self.tutorials = TutorialRepository(self._tutorial_conn)
         self.voting = VotingRepository(self.conn)
         
         self._init_schema()
@@ -2133,17 +2146,17 @@ class SqliteRepository:
     def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str] = None) -> TutorialVersion:
         return self.tutorials.create_tutorial(config, created_by)
 
-    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_revision: int,
                         created_by: Optional[str] = None) -> Optional[TutorialVersion]:
-        return self.tutorials.update_tutorial(tutorial_id, config, expected_version, created_by)
+        return self.tutorials.update_tutorial(tutorial_id, config, expected_revision, created_by)
 
     def publish_tutorial(self, tutorial_id: str, version: int,
-                         expected_version: int) -> Optional[TutorialVersion]:
-        return self.tutorials.publish_tutorial(tutorial_id, version, expected_version)
+                         expected_revision: int) -> Optional[TutorialVersion]:
+        return self.tutorials.publish_tutorial(tutorial_id, version, expected_revision)
 
     def disable_tutorial(self, tutorial_id: str,
-                         expected_version: int) -> Optional[TutorialVersion]:
-        return self.tutorials.disable_tutorial(tutorial_id, expected_version)
+                         expected_revision: int) -> Optional[TutorialVersion]:
+        return self.tutorials.disable_tutorial(tutorial_id, expected_revision)
 
 
 # Initialize SQLite repository - fail fast if unable to connect

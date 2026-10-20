@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 TUTORIAL_SCHEMA_VERSION = 1
+TUTORIAL_MAX_CONFIG_BYTES = 350 * 1024
+TUTORIAL_MAX_ID_BYTES = 128
 TUTORIAL_STEP_IDS = (
     "welcome", "roles", "waiting", "sprint", "responses", "engineer",
     "discussion", "stakeholder", "reveal", "controls", "cascade", "wrapup",
@@ -34,9 +36,9 @@ class TutorialValidationError(ValueError):
 
 
 class TutorialConflictError(RuntimeError):
-    def __init__(self, current_version: int):
+    def __init__(self, current_revision: int):
         super().__init__("The tutorial was changed by another request.")
-        self.current_version = current_version
+        self.current_revision = current_revision
 
 
 class TutorialAlreadyExistsError(RuntimeError):
@@ -52,6 +54,7 @@ class TutorialVersion:
     created_at: str
     created_by: Optional[str] = None
     published_at: Optional[str] = None
+    revision: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -64,7 +67,14 @@ class TutorialVersion:
         }
         if self.published_at is not None:
             result["publishedAt"] = self.published_at
+        if self.revision is not None:
+            result["revision"] = self.revision
         return result
+
+
+def serialize_tutorial_config(config: Dict[str, Any]) -> str:
+    """Serialize exactly as persisted so validation enforces DynamoDB's item budget."""
+    return json.dumps(config, ensure_ascii=False, separators=(",", ":"))
 
 
 def _is_object(value: Any) -> bool:
@@ -81,6 +91,11 @@ def validate_tutorial_config(config: Any, path: str = "config") -> Dict[str, Any
     def nonempty(value: Any, field_path: str) -> bool:
         if not isinstance(value, str) or not value.strip():
             issue(field_path, "Must be a non-empty string.", "nonempty_string")
+            return False
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            issue(field_path, "Must contain valid Unicode.", "invalid_unicode")
             return False
         return True
 
@@ -108,8 +123,17 @@ def validate_tutorial_config(config: Any, path: str = "config") -> Dict[str, Any
     if config.get("schemaVersion") != TUTORIAL_SCHEMA_VERSION or isinstance(config.get("schemaVersion"), bool):
         issue(f"{path}.schemaVersion", "Must equal 1.", "unsupported_schema_version")
     tutorial_id = config.get("id")
-    if nonempty(tutorial_id, f"{path}.id") and "#" in tutorial_id:
-        issue(f"{path}.id", "Must not contain '#'.", "invalid_id")
+    if nonempty(tutorial_id, f"{path}.id"):
+        if tutorial_id != tutorial_id.strip():
+            issue(f"{path}.id", "Must not have leading or trailing whitespace.", "invalid_id")
+        if "#" in tutorial_id:
+            issue(f"{path}.id", "Must not contain '#'.", "invalid_id")
+        if len(tutorial_id.encode("utf-8")) > TUTORIAL_MAX_ID_BYTES:
+            issue(
+                f"{path}.id",
+                f"Must be at most {TUTORIAL_MAX_ID_BYTES} UTF-8 bytes.",
+                "max_bytes",
+            )
     nonempty(config.get("title"), f"{path}.title")
     if "description" in config:
         nonempty(config["description"], f"{path}.description")
@@ -199,6 +223,15 @@ def validate_tutorial_config(config: Any, path: str = "config") -> Dict[str, Any
                 nonempty(difference.get("omitted"), f"{difference_path}.omitted")
                 nonempty(difference.get("actualBehavior"), f"{difference_path}.actualBehavior")
 
+    if not issues:
+        serialized_size = len(serialize_tutorial_config(config).encode("utf-8"))
+        if serialized_size > TUTORIAL_MAX_CONFIG_BYTES:
+            issue(
+                path,
+                f"Serialized configuration must be at most {TUTORIAL_MAX_CONFIG_BYTES} UTF-8 bytes.",
+                "max_bytes",
+            )
+
     if issues:
         raise TutorialValidationError(issues)
     return config
@@ -255,16 +288,26 @@ class TutorialRepository:
                 latest_version INTEGER NOT NULL,
                 current_draft_version INTEGER,
                 published_version INTEGER,
-                disabled INTEGER NOT NULL DEFAULT 0
+                disabled INTEGER NOT NULL DEFAULT 0,
+                revision INTEGER NOT NULL DEFAULT 1
             );
             CREATE INDEX IF NOT EXISTS idx_tutorial_versions_status
                 ON tutorial_versions(id, status, version DESC);
         """)
+        head_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(tutorial_heads)").fetchall()
+        }
+        if "revision" not in head_columns:
+            self.conn.execute(
+                "ALTER TABLE tutorial_heads ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+            )
+            self.conn.execute("UPDATE tutorial_heads SET revision = latest_version")
         self.conn.commit()
 
     def list_tutorials(self) -> List[TutorialVersion]:
         rows = self.conn.execute("""
-            SELECT v.*, h.disabled AS resource_disabled FROM tutorial_heads h
+            SELECT v.*, h.disabled AS resource_disabled, h.revision AS revision
+            FROM tutorial_heads h
             JOIN tutorial_versions v ON v.id = h.id AND v.version = h.latest_version
             ORDER BY json_extract(v.config_json, '$.title') COLLATE NOCASE
         """).fetchall()
@@ -277,31 +320,33 @@ class TutorialRepository:
     def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]:
         if version is None:
             row = self.conn.execute("""
-                SELECT v.* FROM tutorial_heads h
+                SELECT v.*, h.revision AS revision FROM tutorial_heads h
                 JOIN tutorial_versions v ON v.id = h.id
                  AND v.version = COALESCE(h.current_draft_version, h.latest_version)
                 WHERE h.id = ?
             """, (tutorial_id,)).fetchone()
         else:
-            row = self.conn.execute(
-                "SELECT * FROM tutorial_versions WHERE id = ? AND version = ?",
-                (tutorial_id, version),
-            ).fetchone()
+            row = self.conn.execute("""
+                SELECT v.*, h.revision AS revision FROM tutorial_versions v
+                JOIN tutorial_heads h ON h.id = v.id
+                WHERE v.id = ? AND v.version = ?
+            """, (tutorial_id, version)).fetchone()
         return self._row_to_version(row) if row else None
 
     def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
         row = self.conn.execute("""
-            SELECT v.* FROM tutorial_heads h
+            SELECT v.*, h.revision AS revision FROM tutorial_heads h
             JOIN tutorial_versions v ON v.id = h.id AND v.version = h.published_version
             WHERE h.id = ? AND h.disabled = 0 AND v.status = 'published'
         """, (tutorial_id,)).fetchone()
         return self._row_to_version(row) if row else None
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
-        rows = self.conn.execute(
-            "SELECT * FROM tutorial_versions WHERE id = ? ORDER BY version DESC",
-            (tutorial_id,),
-        ).fetchall()
+        rows = self.conn.execute("""
+            SELECT v.*, h.revision AS revision FROM tutorial_versions v
+            JOIN tutorial_heads h ON h.id = v.id
+            WHERE v.id = ? ORDER BY v.version DESC
+        """, (tutorial_id,)).fetchall()
         return [self._row_to_version(row) for row in rows]
 
     def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str]) -> TutorialVersion:
@@ -312,24 +357,27 @@ class TutorialRepository:
                 self.conn.execute("BEGIN IMMEDIATE")
                 if self.conn.execute("SELECT 1 FROM tutorial_heads WHERE id = ?", (tutorial_id,)).fetchone():
                     raise TutorialAlreadyExistsError(tutorial_id)
+                config_json = serialize_tutorial_config(config)
                 self.conn.execute("""
                     INSERT INTO tutorial_versions
                         (id, version, status, config_json, created_at, created_by)
                     VALUES (?, 1, 'draft', ?, ?, ?)
-                """, (tutorial_id, json.dumps(config), now, created_by))
+                """, (tutorial_id, config_json, now, created_by))
                 self.conn.execute("""
                     INSERT INTO tutorial_heads
-                        (id, latest_version, current_draft_version, published_version, disabled)
-                    VALUES (?, 1, 1, NULL, 0)
+                        (id, latest_version, current_draft_version, published_version, disabled, revision)
+                    VALUES (?, 1, 1, NULL, 0, 1)
                 """, (tutorial_id,))
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
                 raise
-        return TutorialVersion(tutorial_id, 1, "draft", config, now, created_by)
+        return TutorialVersion(
+            tutorial_id, 1, "draft", config, now, created_by, revision=1
+        )
 
     def update_tutorial(
-        self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+        self, tutorial_id: str, config: Dict[str, Any], expected_revision: int,
         created_by: Optional[str],
     ) -> Optional[TutorialVersion]:
         now = datetime.now(timezone.utc).isoformat()
@@ -342,33 +390,38 @@ class TutorialRepository:
                 if not head:
                     self.conn.rollback()
                     return None
-                if head["latest_version"] != expected_version:
-                    raise TutorialConflictError(head["latest_version"])
-                new_version = expected_version + 1
+                if head["revision"] != expected_revision:
+                    raise TutorialConflictError(head["revision"])
+                new_version = int(head["latest_version"]) + 1
+                new_revision = int(head["revision"]) + 1
                 old_draft = head["current_draft_version"]
                 if old_draft is not None:
                     self.conn.execute(
                         "UPDATE tutorial_versions SET status = 'disabled' WHERE id = ? AND version = ? AND status = 'draft'",
                         (tutorial_id, old_draft),
                     )
+                config_json = serialize_tutorial_config(config)
                 self.conn.execute("""
                     INSERT INTO tutorial_versions
                         (id, version, status, config_json, created_at, created_by)
                     VALUES (?, ?, 'draft', ?, ?, ?)
-                """, (tutorial_id, new_version, json.dumps(config), now, created_by))
+                """, (tutorial_id, new_version, config_json, now, created_by))
                 self.conn.execute("""
                     UPDATE tutorial_heads
-                    SET latest_version = ?, current_draft_version = ?, disabled = 0
+                    SET latest_version = ?, current_draft_version = ?, revision = ?
                     WHERE id = ?
-                """, (new_version, new_version, tutorial_id))
+                """, (new_version, new_version, new_revision, tutorial_id))
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
                 raise
-        return TutorialVersion(tutorial_id, new_version, "draft", config, now, created_by)
+        return TutorialVersion(
+            tutorial_id, new_version, "draft", config, now, created_by,
+            revision=new_revision,
+        )
 
     def publish_tutorial(
-        self, tutorial_id: str, version: int, expected_version: int
+        self, tutorial_id: str, version: int, expected_revision: int
     ) -> Optional[TutorialVersion]:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
@@ -378,8 +431,9 @@ class TutorialRepository:
                 if not head:
                     self.conn.rollback()
                     return None
-                if head["latest_version"] != expected_version:
-                    raise TutorialConflictError(head["latest_version"])
+                if head["revision"] != expected_revision:
+                    raise TutorialConflictError(head["revision"])
+                new_revision = int(head["revision"]) + 1
                 row = self.conn.execute(
                     "SELECT * FROM tutorial_versions WHERE id = ? AND version = ?", (tutorial_id, version)
                 ).fetchone()
@@ -398,19 +452,21 @@ class TutorialRepository:
                 )
                 current_draft = None if head["current_draft_version"] == version else head["current_draft_version"]
                 self.conn.execute("""
-                    UPDATE tutorial_heads SET published_version = ?, current_draft_version = ?, disabled = 0
+                    UPDATE tutorial_heads
+                    SET published_version = ?, current_draft_version = ?, disabled = 0,
+                        revision = ?
                     WHERE id = ?
-                """, (version, current_draft, tutorial_id))
+                """, (version, current_draft, new_revision, tutorial_id))
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
                 raise
         return TutorialVersion(
             tutorial_id, version, "published", json.loads(row["config_json"]),
-            row["created_at"], row["created_by"], now,
+            row["created_at"], row["created_by"], now, revision=new_revision,
         )
 
-    def disable_tutorial(self, tutorial_id: str, expected_version: int) -> Optional[TutorialVersion]:
+    def disable_tutorial(self, tutorial_id: str, expected_revision: int) -> Optional[TutorialVersion]:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             try:
@@ -419,8 +475,9 @@ class TutorialRepository:
                 if not head:
                     self.conn.rollback()
                     return None
-                if head["latest_version"] != expected_version:
-                    raise TutorialConflictError(head["latest_version"])
+                if head["revision"] != expected_revision:
+                    raise TutorialConflictError(head["revision"])
+                new_revision = int(head["revision"]) + 1
                 published_version = head["published_version"]
                 if published_version is None:
                     self.conn.rollback()
@@ -433,10 +490,11 @@ class TutorialRepository:
                     "UPDATE tutorial_versions SET status = 'disabled' WHERE id = ? AND version = ?",
                     (tutorial_id, published_version),
                 )
-                self.conn.execute(
-                    "UPDATE tutorial_heads SET published_version = NULL, disabled = 1 WHERE id = ?",
-                    (tutorial_id,),
-                )
+                self.conn.execute("""
+                    UPDATE tutorial_heads
+                    SET published_version = NULL, disabled = 1, revision = ?
+                    WHERE id = ?
+                """, (new_revision, tutorial_id))
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
@@ -444,6 +502,7 @@ class TutorialRepository:
         return TutorialVersion(
             tutorial_id, published_version, "disabled", json.loads(row["config_json"]),
             row["created_at"], row["created_by"], row["published_at"],
+            revision=new_revision,
         )
 
     @staticmethod
@@ -452,4 +511,5 @@ class TutorialRepository:
             id=row["id"], version=int(row["version"]), status=row["status"],
             config=json.loads(row["config_json"]), created_at=row["created_at"],
             created_by=row["created_by"], published_at=row["published_at"],
+            revision=int(row["revision"]) if "revision" in row.keys() else None,
         )

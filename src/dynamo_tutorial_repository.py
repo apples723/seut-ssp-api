@@ -12,6 +12,7 @@ from .tutorial_repository import (
     TutorialAlreadyExistsError,
     TutorialConflictError,
     TutorialVersion,
+    serialize_tutorial_config,
 )
 
 GSI_SCENARIOS_LIST = "gsi-scenarios-list"
@@ -40,6 +41,7 @@ class DynamoTutorialRepository:
         for head in heads:
             tutorial = self.get_tutorial(head["tutorialId"], int(head["latestVersion"]))
             if tutorial:
+                tutorial.revision = int(head.get("revision", head["latestVersion"]))
                 if head.get("disabled", False):
                     tutorial.status = "disabled"
                 tutorials.append(tutorial)
@@ -48,16 +50,19 @@ class DynamoTutorialRepository:
 
     def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]:
         pk = tutorial_pk(tutorial_id)
+        head = self._get_head(tutorial_id)
+        if not head:
+            return None
         if version is None:
-            head = self._get_head(tutorial_id)
-            if not head:
-                return None
             version = int(head.get("currentDraftVersion", head["latestVersion"]))
         response = self._table.get_item(
             Key={"PK": pk, "SK": version_sk(version)}, ConsistentRead=True
         )
         item = response.get("Item")
-        return self._item_to_version(item) if item else None
+        tutorial = self._item_to_version(item) if item else None
+        if tutorial:
+            tutorial.revision = int(head.get("revision", head["latestVersion"]))
+        return tutorial
 
     def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
         head = self._get_head(tutorial_id)
@@ -67,12 +72,18 @@ class DynamoTutorialRepository:
         return tutorial if tutorial and tutorial.status == "published" else None
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
+        head = self._get_head(tutorial_id)
+        if not head:
+            return []
         items = query_all_pages(
             self._table,
             Key("PK").eq(tutorial_pk(tutorial_id)) & Key("SK").begins_with("VER#"),
             ConsistentRead=True,
         )
+        revision = int(head.get("revision", head["latestVersion"]))
         versions = [self._item_to_version(item) for item in items]
+        for version in versions:
+            version.revision = revision
         versions.sort(key=lambda item: item.version, reverse=True)
         return versions
 
@@ -86,6 +97,7 @@ class DynamoTutorialRepository:
             "SK": "HEAD",
             "tutorialId": tutorial_id,
             "latestVersion": 1,
+            "revision": 1,
             "currentDraftVersion": 1,
             "disabled": False,
             "GSI1PK": GSI_TUTORIALS_VALUE,
@@ -102,19 +114,22 @@ class DynamoTutorialRepository:
             if self._is_conditional(error):
                 raise TutorialAlreadyExistsError(tutorial_id) from error
             raise
-        return TutorialVersion(tutorial_id, 1, "draft", config, now, created_by)
+        return TutorialVersion(
+            tutorial_id, 1, "draft", config, now, created_by, revision=1
+        )
 
     def update_tutorial(
-        self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+        self, tutorial_id: str, config: Dict[str, Any], expected_revision: int,
         created_by: Optional[str],
     ) -> Optional[TutorialVersion]:
         head = self._get_head(tutorial_id)
         if not head:
             return None
-        current = int(head["latestVersion"])
-        if current != expected_version:
-            raise TutorialConflictError(current)
-        new_version = current + 1
+        current_revision = int(head.get("revision", head["latestVersion"]))
+        if current_revision != expected_revision:
+            raise TutorialConflictError(current_revision)
+        new_version = int(head["latestVersion"]) + 1
+        new_revision = current_revision + 1
         now = datetime.now(timezone.utc).isoformat()
         item = self._build_version_item(tutorial_id, new_version, "draft", config, now, created_by)
         transactions = [
@@ -123,9 +138,13 @@ class DynamoTutorialRepository:
             {"Update": {
                 "TableName": self._table.table_name,
                 "Key": self._serialize({"PK": tutorial_pk(tutorial_id), "SK": "HEAD"}),
-                "UpdateExpression": "SET latestVersion = :new, currentDraftVersion = :new, disabled = :false",
-                "ConditionExpression": "latestVersion = :expected",
-                "ExpressionAttributeValues": self._serialize({":new": new_version, ":false": False, ":expected": expected_version}),
+                "UpdateExpression": "SET latestVersion = :new, currentDraftVersion = :new, revision = :revision",
+                "ConditionExpression": "revision = :expected OR (attribute_not_exists(revision) AND latestVersion = :expected)",
+                "ExpressionAttributeValues": self._serialize({
+                    ":new": new_version,
+                    ":revision": new_revision,
+                    ":expected": expected_revision,
+                }),
             }},
         ]
         old_draft = head.get("currentDraftVersion")
@@ -139,17 +158,21 @@ class DynamoTutorialRepository:
                 "ExpressionAttributeValues": self._serialize({":disabled": "disabled", ":draft": "draft"}),
             }})
         self._transact_with_conflict(transactions, tutorial_id)
-        return TutorialVersion(tutorial_id, new_version, "draft", config, now, created_by)
+        return TutorialVersion(
+            tutorial_id, new_version, "draft", config, now, created_by,
+            revision=new_revision,
+        )
 
     def publish_tutorial(
-        self, tutorial_id: str, version: int, expected_version: int
+        self, tutorial_id: str, version: int, expected_revision: int
     ) -> Optional[TutorialVersion]:
         head = self._get_head(tutorial_id)
         if not head:
             return None
-        current = int(head["latestVersion"])
-        if current != expected_version:
-            raise TutorialConflictError(current)
+        current_revision = int(head.get("revision", head["latestVersion"]))
+        if current_revision != expected_revision:
+            raise TutorialConflictError(current_revision)
+        new_revision = current_revision + 1
         selected = self.get_tutorial(tutorial_id, version)
         if not selected:
             return None
@@ -172,28 +195,38 @@ class DynamoTutorialRepository:
                 "ExpressionAttributeValues": self._serialize({":disabled": "disabled"}),
             }})
         if head.get("currentDraftVersion") is not None and int(head["currentDraftVersion"]) == version:
-            update_expression = "SET publishedVersion = :version, disabled = :false REMOVE currentDraftVersion"
+            update_expression = (
+                "SET publishedVersion = :version, disabled = :false, revision = :revision "
+                "REMOVE currentDraftVersion"
+            )
         else:
-            update_expression = "SET publishedVersion = :version, disabled = :false"
+            update_expression = "SET publishedVersion = :version, disabled = :false, revision = :revision"
         transactions.append({"Update": {
             "TableName": self._table.table_name,
             "Key": self._serialize({"PK": tutorial_pk(tutorial_id), "SK": "HEAD"}),
             "UpdateExpression": update_expression,
-            "ConditionExpression": "latestVersion = :expected",
-            "ExpressionAttributeValues": self._serialize({":version": version, ":false": False, ":expected": expected_version}),
+            "ConditionExpression": "revision = :expected OR (attribute_not_exists(revision) AND latestVersion = :expected)",
+            "ExpressionAttributeValues": self._serialize({
+                ":version": version,
+                ":false": False,
+                ":revision": new_revision,
+                ":expected": expected_revision,
+            }),
         }})
         self._transact_with_conflict(transactions, tutorial_id)
         selected.status = "published"
         selected.published_at = now
+        selected.revision = new_revision
         return selected
 
-    def disable_tutorial(self, tutorial_id: str, expected_version: int) -> Optional[TutorialVersion]:
+    def disable_tutorial(self, tutorial_id: str, expected_revision: int) -> Optional[TutorialVersion]:
         head = self._get_head(tutorial_id)
         if not head:
             return None
-        current = int(head["latestVersion"])
-        if current != expected_version:
-            raise TutorialConflictError(current)
+        current_revision = int(head.get("revision", head["latestVersion"]))
+        if current_revision != expected_revision:
+            raise TutorialConflictError(current_revision)
+        new_revision = current_revision + 1
         published = head.get("publishedVersion")
         if published is None:
             return None
@@ -212,13 +245,23 @@ class DynamoTutorialRepository:
             {"Update": {
                 "TableName": self._table.table_name,
                 "Key": self._serialize({"PK": tutorial_pk(tutorial_id), "SK": "HEAD"}),
-                "UpdateExpression": "SET disabled = :true REMOVE publishedVersion",
-                "ConditionExpression": "latestVersion = :expected AND publishedVersion = :published",
-                "ExpressionAttributeValues": self._serialize({":true": True, ":expected": expected_version, ":published": published}),
+                "UpdateExpression": "SET disabled = :true, revision = :revision REMOVE publishedVersion",
+                "ConditionExpression": (
+                    "(revision = :expected OR "
+                    "(attribute_not_exists(revision) AND latestVersion = :expected)) "
+                    "AND publishedVersion = :published"
+                ),
+                "ExpressionAttributeValues": self._serialize({
+                    ":true": True,
+                    ":revision": new_revision,
+                    ":expected": expected_revision,
+                    ":published": published,
+                }),
             }},
         ]
         self._transact_with_conflict(transactions, tutorial_id)
         selected.status = "disabled"
+        selected.revision = new_revision
         return selected
 
     def _get_head(self, tutorial_id: str) -> Optional[Dict[str, Any]]:
@@ -233,14 +276,21 @@ class DynamoTutorialRepository:
         except ClientError as error:
             if self._is_conditional(error):
                 head = self._get_head(tutorial_id)
-                raise TutorialConflictError(int(head["latestVersion"]) if head else 0) from error
+                current_revision = int(head.get("revision", head["latestVersion"])) if head else 0
+                raise TutorialConflictError(current_revision) from error
             raise
 
     @staticmethod
     def _is_conditional(error: ClientError) -> bool:
-        return error.response.get("Error", {}).get("Code") in {
-            "ConditionalCheckFailedException", "TransactionCanceledException"
-        }
+        code = error.response.get("Error", {}).get("Code")
+        if code == "ConditionalCheckFailedException":
+            return True
+        if code != "TransactionCanceledException":
+            return False
+        return any(
+            reason.get("Code") == "ConditionalCheckFailed"
+            for reason in error.response.get("CancellationReasons", [])
+        )
 
     def _build_version_item(
         self, tutorial_id: str, version: int, status: str, config: Dict[str, Any],
@@ -249,7 +299,7 @@ class DynamoTutorialRepository:
         item = {
             "PK": tutorial_pk(tutorial_id), "SK": version_sk(version),
             "tutorialId": tutorial_id, "version": version, "status": status,
-            "configJson": json.dumps(config), "createdAt": created_at,
+            "configJson": serialize_tutorial_config(config), "createdAt": created_at,
             "createdBy": created_by, "publishedAt": published_at,
         }
         return {key: value for key, value in item.items() if value is not None and value != ""}

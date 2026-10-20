@@ -60,7 +60,7 @@ Every step requires `id`, `navigationLabel`, `eyebrow`, `title`, a non-empty `bo
 
 `welcome` and `cascade` each require exactly one `teaching-arc` slot. `wrapup` requires exactly one `actions` slot. Other steps permit no slots. `tip` is optional and is either a non-empty Markdown string or an object containing both non-empty `participant` and `facilitator` strings. Each difference contains exactly non-empty `omitted` and `actualBehavior` strings.
 
-The only template tokens are `{{scenarioName}}`, `{{headToHeadRoleA}}`, and `{{headToHeadRoleB}}`.
+A tutorial ID must be non-empty, limited to 128 UTF-8 bytes, have no leading or trailing whitespace, and contain no `#`. Configurations serialize to at most 358,400 UTF-8 bytes so a complete version item remains below DynamoDB's 400 KiB limit. The only template tokens are `{{scenarioName}}`, `{{headToHeadRoleA}}`, and `{{headToHeadRoleB}}`.
 
 ## Responses and errors
 
@@ -70,6 +70,7 @@ A version object has this shape:
 {
   "id": "default",
   "version": 3,
+  "revision": 5,
   "status": "draft",
   "config": {},
   "createdAt": "2025-01-01T00:00:00+00:00",
@@ -78,9 +79,9 @@ A version object has this shape:
 }
 ```
 
-`publishedAt` is present when applicable. Successful public reads return `{ "ok": true, "tutorial": <version> }`. Admin endpoints return the same version envelope where applicable.
+`version` identifies an immutable content snapshot. `revision` identifies the current aggregate state, advances after every save, publish, or disable operation, and is used for optimistic concurrency. `publishedAt` is present when applicable. Successful public reads return `{ "ok": true, "tutorial": <version> }`. Admin endpoints return the same version envelope where applicable.
 
-Malformed JSON and request/schema validation failures return HTTP 400. Schema failures include structured `errors` entries with `path`, `message`, and `code`. A stale `expectedVersion` returns HTTP 409 and `currentVersion`. Missing tutorials or versions return HTTP 404. Admin endpoints require the existing `X-Admin-Token` header.
+Malformed JSON and request/schema validation failures return HTTP 400. Schema failures include structured `errors` entries with `path`, `message`, and `code`. A stale `expectedRevision` returns HTTP 409 and `currentRevision`. Missing tutorials or versions return HTTP 404. Admin endpoints require the existing `X-Admin-Token` header.
 
 ## Endpoints
 
@@ -91,11 +92,11 @@ Malformed JSON and request/schema validation failures return HTTP 400. Schema fa
 | POST | `/admin/tutorials/get` | `tutorialId`, optional `version` | Get a version; without `version`, prefer current draft |
 | POST | `/admin/tutorials/history` | `tutorialId` | List immutable history newest first |
 | POST | `/admin/tutorials/create` | `config`, optional `createdBy` | Create version 1 as draft |
-| POST | `/admin/tutorials/update` | `tutorialId`, `config`, `expectedVersion`, optional `createdBy` | Save a new draft version |
+| POST | `/admin/tutorials/update` | `tutorialId`, `config`, `expectedRevision`, optional `createdBy` | Save a new draft version |
 | POST | `/admin/tutorials/diff` | `tutorialId`, `config`, optional `version` | Return recursive path-based changes |
 | POST | `/admin/tutorials/import` | `config` | Validate and preview create/update; never writes |
-| POST | `/admin/tutorials/publish` | `tutorialId`, `expectedVersion`, optional `version` | Publish the selected version; defaults to current draft/latest |
-| POST | `/admin/tutorials/disable` | `tutorialId`, `expectedVersion` | Remove the public pointer without deleting history |
+| POST | `/admin/tutorials/publish` | `tutorialId`, `expectedRevision`, optional `version` | Publish the selected version; defaults to current draft/latest |
+| POST | `/admin/tutorials/disable` | `tutorialId`, `expectedRevision` | Remove the public pointer without deleting history |
 
 For create/import, `tutorialId` is derived from `config.id`. For update/diff, `config.id` must match the envelope's `tutorialId`.
 
@@ -104,13 +105,13 @@ For create/import, `tutorialId` is derived from `config.id`. For update/diff, `c
 Versions use monotonic integers. Configuration payloads are immutable after insertion. Lifecycle metadata supports `draft`, `published`, and `disabled`:
 
 - **Create** writes the first draft and establishes the current-draft pointer.
-- **Update** checks `expectedVersion`, disables the superseded draft, inserts a new immutable version, and advances the current-draft/latest pointers atomically.
-- **Publish** revalidates the selected version, changes its lifecycle status, disables the previously published version, and moves the published pointer.
-- **Disable** marks the published version disabled and removes the published pointer. History remains available to administrators.
+- **Update** checks `expectedRevision`, disables the superseded draft, inserts a new immutable version, advances the current-draft/latest pointers, and increments the aggregate revision atomically. It preserves the resource's disabled state; only publishing restores public availability.
+- **Publish** checks and increments the aggregate revision, revalidates the selected version, changes its lifecycle status, disables the previously published version, and moves the published pointer.
+- **Disable** checks and increments the aggregate revision, marks the published version disabled, and removes the published pointer. History remains available to administrators.
 
-SQLite stores version rows in `tutorial_versions` and pointers in `tutorial_heads`. Writes use `BEGIN IMMEDIATE` plus a process lock, so version comparison and pointer changes occur in one transaction.
+SQLite stores version rows in `tutorial_versions` and pointers in `tutorial_heads`. Tutorial writes use a dedicated connection with `BEGIN IMMEDIATE` plus a process lock, so version comparison and pointer changes occur in one transaction without sharing commit boundaries with session, scenario, or voting writes.
 
-DynamoDB reuses the existing `ssp-scenarios` table and `gsi-scenarios-list` resource. Tutorial partitions use `PK=TUTOR#<tutorialId>`, immutable `SK=VER#000001` values, and `SK=HEAD` for pointers. Head items use `GSI1PK=ALL_TUTORIALS` and `GSI1SK=TUTOR#<tutorialId>`, keeping them distinct from scenario entries. Multi-item lifecycle writes use conditional transactions and compare `latestVersion` with `expectedVersion`.
+DynamoDB reuses the existing `ssp-scenarios` table and `gsi-scenarios-list` resource. Tutorial partitions use `PK=TUTOR#<tutorialId>`, immutable `SK=VER#000001` values, and `SK=HEAD` for pointers. Head items use `GSI1PK=ALL_TUTORIALS` and `GSI1SK=TUTOR#<tutorialId>`, keeping them distinct from scenario entries. Multi-item lifecycle writes use conditional transactions and compare the head `revision` with `expectedRevision`.
 
 ## Deployment and storage implications
 

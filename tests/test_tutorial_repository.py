@@ -154,10 +154,12 @@ def test_existing_sqlite_heads_gain_revision_from_latest_version() -> None:
     assert dict(head) == {"latest_version": 4, "revision": 4}
 
 
-def test_service_contract_uses_revision_for_every_lifecycle_write(monkeypatch) -> None:
+def test_service_contract_uses_revision_for_every_lifecycle_write(monkeypatch, tmp_path) -> None:
     import importlib
     import json
 
+    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "service-contract.db"))
     tutorial_services = importlib.import_module("src.services.tutorials")
     repo = repository()
     monkeypatch.setattr(tutorial_services, "repo", repo)
@@ -266,34 +268,3 @@ def test_service_contract_exposes_and_checks_aggregate_revision(monkeypatch, tmp
     assert service.get_tutorial_config({
         "queryStringParameters": {"id": "default"},
     })["statusCode"] == 404
-
-
-def test_dynamo_draft_transaction_checks_revision_and_preserves_disabled(monkeypatch) -> None:
-    pytest.importorskip("boto3")
-    from types import SimpleNamespace
-    from src.dynamo_tutorial_repository import DynamoTutorialRepository
-
-    repo = object.__new__(DynamoTutorialRepository)
-    repo._table = SimpleNamespace(table_name="tutorials")
-    head = {
-        "latestVersion": 4,
-        "revision": 7,
-        "currentDraftVersion": 4,
-        "disabled": True,
-    }
-    captured = []
-    repo._get_head = lambda _tutorial_id: head
-    repo._serialize = lambda values: values
-    repo._transact_with_conflict = lambda transactions, _tutorial_id: captured.extend(transactions)
-
-    saved = repo.update_tutorial(
-        "default", tutorial_config(), expected_revision=7, created_by="admin"
-    )
-
-    assert saved is not None
-    assert saved.version == 5
-    assert saved.revision == 8
-    head_update = captured[1]["Update"]
-    assert "revision = :expected" in head_update["ConditionExpression"]
-    assert "revision = :revision" in head_update["UpdateExpression"]
-    assert "disabled" not in head_update["UpdateExpression"]

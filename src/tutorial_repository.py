@@ -93,8 +93,9 @@ def validate_tutorial_config(config: Any, path: str = "config") -> Dict[str, Any
         if not nonempty(value, field_path):
             return
         for token in TOKEN_PATTERN.findall(value):
-            if token not in TUTORIAL_TOKENS:
-                issue(field_path, f'Unknown template token "{token}".', "unknown_token")
+            token_name = token.strip()
+            if token_name not in TUTORIAL_TOKENS:
+                issue(field_path, f'Unknown template token "{token_name}".', "unknown_token")
         if re.search(r"<\s*/?\s*(script|style|iframe|object|embed|svg|math|img)\b", value, re.IGNORECASE):
             issue(field_path, "Unsafe or unsupported HTML is not allowed.", "unsafe_html")
 
@@ -186,8 +187,8 @@ def validate_tutorial_config(config: Any, path: str = "config") -> Dict[str, Any
                 issue(f"{step_path}.tip", "Must be a string or a complete persona object.", "tip_shape")
 
         differences = step.get("differences")
-        if not isinstance(differences, list):
-            issue(f"{step_path}.differences", "Must be an array.", "array_required")
+        if not isinstance(differences, list) or not differences:
+            issue(f"{step_path}.differences", "Must be a non-empty array.", "nonempty_array")
         else:
             for difference_index, difference in enumerate(differences):
                 difference_path = f"{step_path}.differences[{difference_index}]"
@@ -263,11 +264,15 @@ class TutorialRepository:
 
     def list_tutorials(self) -> List[TutorialVersion]:
         rows = self.conn.execute("""
-            SELECT v.* FROM tutorial_heads h
+            SELECT v.*, h.disabled AS resource_disabled FROM tutorial_heads h
             JOIN tutorial_versions v ON v.id = h.id AND v.version = h.latest_version
             ORDER BY json_extract(v.config_json, '$.title') COLLATE NOCASE
         """).fetchall()
-        return [self._row_to_version(row) for row in rows]
+        tutorials = [self._row_to_version(row) for row in rows]
+        for tutorial, row in zip(tutorials, rows):
+            if row["resource_disabled"]:
+                tutorial.status = "disabled"
+        return tutorials
 
     def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]:
         if version is None:

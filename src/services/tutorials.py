@@ -162,12 +162,10 @@ def admin_create_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     body, error = _parse_body(event)
     if error:
         return error
-    tutorial_id, error = _tutorial_id(body)
+    config, error = _config(body)
     if error:
         return error
-    config, error = _config(body, tutorial_id)
-    if error:
-        return error
+    tutorial_id = config["id"]
     created_by, error = _created_by(body)
     if error:
         return error
@@ -242,12 +240,10 @@ def admin_import_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
     body, error = _parse_body(event)
     if error:
         return error
-    tutorial_id, error = _tutorial_id(body)
+    config, error = _config(body)
     if error:
         return error
-    config, error = _config(body, tutorial_id)
-    if error:
-        return error
+    tutorial_id = config["id"]
     current = repo.get_tutorial(tutorial_id)
     if not current:
         return response(200, {

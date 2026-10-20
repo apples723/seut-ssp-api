@@ -40,6 +40,8 @@ class DynamoTutorialRepository:
         for head in heads:
             tutorial = self.get_tutorial(head["tutorialId"], int(head["latestVersion"]))
             if tutorial:
+                if head.get("disabled", False):
+                    tutorial.status = "disabled"
                 tutorials.append(tutorial)
         tutorials.sort(key=lambda item: item.config.get("title", "").lower())
         return tutorials

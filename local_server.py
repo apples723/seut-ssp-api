@@ -38,6 +38,16 @@ from src.service import (
     admin_diff_scenario,
     admin_import_scenario,
     list_scenarios_public,
+    get_tutorial_config,
+    admin_list_tutorials,
+    admin_get_tutorial,
+    admin_get_tutorial_history,
+    admin_create_tutorial,
+    admin_update_tutorial,
+    admin_diff_tutorial,
+    admin_import_tutorial,
+    admin_publish_tutorial,
+    admin_disable_tutorial,
     get_session_roles,
     select_role,
     assign_player_role,
@@ -136,6 +146,12 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_response(admin_list_sessions(self._build_event()))
         elif path == '/admin/scenarios':
             self._send_response(admin_list_scenarios(self._build_event()))
+        elif path == '/admin/tutorials':
+            self._send_response(admin_list_tutorials(self._build_event()))
+        elif path == '/tutorial/config':
+            self._send_response(get_tutorial_config({
+                'queryStringParameters': {'id': query.get('id', ['default'])[0]}
+            }))
         elif path == '/scenarios':
             self._send_response(list_scenarios_public())
         elif path == '/session/roles':
@@ -354,6 +370,22 @@ class APIHandler(BaseHTTPRequestHandler):
             result = admin_diff_scenario(event)
         elif path == '/admin/scenarios/import':
             result = admin_import_scenario(event)
+        elif path == '/admin/tutorials/get':
+            result = admin_get_tutorial(event)
+        elif path == '/admin/tutorials/history':
+            result = admin_get_tutorial_history(event)
+        elif path == '/admin/tutorials/create':
+            result = admin_create_tutorial(event)
+        elif path == '/admin/tutorials/update':
+            result = admin_update_tutorial(event)
+        elif path == '/admin/tutorials/diff':
+            result = admin_diff_tutorial(event)
+        elif path == '/admin/tutorials/import':
+            result = admin_import_tutorial(event)
+        elif path == '/admin/tutorials/publish':
+            result = admin_publish_tutorial(event)
+        elif path == '/admin/tutorials/disable':
+            result = admin_disable_tutorial(event)
         elif path == '/session/select-role':
             result = select_role(event)
         elif path == '/facilitator/assign-role':

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .models import Session, Participant, ResponseItem, Sprint, ChatMessage, Vote, VoterInfo, VoterType, SprintQuestion, HeadToHead, RolePin
 from .scenario_repository import ScenarioRepository, ScenarioVersion, load_scenario_from_file, parse_sprints_from_scenario
+from .tutorial_repository import TutorialRepository, TutorialVersion
 from .voting_repository import VotingRepository
 
 
@@ -43,6 +44,7 @@ class SqliteRepository:
         
         # Initialize sub-repositories
         self.scenarios = ScenarioRepository(self.conn)
+        self.tutorials = TutorialRepository(self.conn)
         self.voting = VotingRepository(self.conn)
         
         self._init_schema()
@@ -2113,6 +2115,35 @@ class SqliteRepository:
             ip_address=ip_address,
             joined_at=now,
         )
+
+    # ==================== Tutorial Administration ====================
+
+    def list_tutorials(self) -> List[TutorialVersion]:
+        return self.tutorials.list_tutorials()
+
+    def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]:
+        return self.tutorials.get_tutorial(tutorial_id, version)
+
+    def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
+        return self.tutorials.get_published_tutorial(tutorial_id)
+
+    def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
+        return self.tutorials.get_tutorial_history(tutorial_id)
+
+    def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str] = None) -> TutorialVersion:
+        return self.tutorials.create_tutorial(config, created_by)
+
+    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+                        created_by: Optional[str] = None) -> Optional[TutorialVersion]:
+        return self.tutorials.update_tutorial(tutorial_id, config, expected_version, created_by)
+
+    def publish_tutorial(self, tutorial_id: str, version: int,
+                         expected_version: int) -> Optional[TutorialVersion]:
+        return self.tutorials.publish_tutorial(tutorial_id, version, expected_version)
+
+    def disable_tutorial(self, tutorial_id: str,
+                         expected_version: int) -> Optional[TutorialVersion]:
+        return self.tutorials.disable_tutorial(tutorial_id, expected_version)
 
 
 # Initialize SQLite repository - fail fast if unable to connect

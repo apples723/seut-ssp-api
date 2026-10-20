@@ -16,6 +16,7 @@ from .models import (
     Sprint,
 )
 from .scenario_repository import ScenarioVersion
+from .tutorial_repository import TutorialVersion
 
 
 class RepositoryProtocol(Protocol):
@@ -393,3 +394,24 @@ class RepositoryProtocol(Protocol):
     def diff_scenario(self, scenario_id: str, new_data: Dict[str, Any]) -> Dict[str, Any]:
         """Compare new data against the current version and return differences."""
         ...
+
+    # ==================== Tutorial Administration ====================
+
+    def list_tutorials(self) -> List[TutorialVersion]: ...
+
+    def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]: ...
+
+    def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]: ...
+
+    def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]: ...
+
+    def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str] = None) -> TutorialVersion: ...
+
+    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+                        created_by: Optional[str] = None) -> Optional[TutorialVersion]: ...
+
+    def publish_tutorial(self, tutorial_id: str, version: int,
+                         expected_version: int) -> Optional[TutorialVersion]: ...
+
+    def disable_tutorial(self, tutorial_id: str,
+                         expected_version: int) -> Optional[TutorialVersion]: ...

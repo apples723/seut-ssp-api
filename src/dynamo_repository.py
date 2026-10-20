@@ -33,7 +33,9 @@ from .models import (
     HeadToHead,
 )
 from .scenario_repository import ScenarioVersion
+from .tutorial_repository import TutorialVersion
 from .dynamo_scenario_repository import DynamoScenarioRepository
+from .dynamo_tutorial_repository import DynamoTutorialRepository
 from .dynamo_helpers import (
     session_pk,
     meta_sk,
@@ -114,8 +116,9 @@ class DynamoRepository:
         self._session_table = self._resource.Table(SESSION_TABLE_NAME)
         self._scenario_table = self._resource.Table(SCENARIO_TABLE_NAME)
 
-        # Initialize scenario sub-repository
+        # Initialize domain sub-repositories on the shared scenario resource.
         self._scenario_repo = DynamoScenarioRepository(self._scenario_table)
+        self._tutorial_repo = DynamoTutorialRepository(self._scenario_table)
 
     def _ensure_tables(self) -> None:
         """Create DynamoDB tables for local development if they don't already exist.
@@ -2210,3 +2213,32 @@ class DynamoRepository:
     ) -> Dict[str, Any]:
         """Compare new data against the current version and return differences."""
         return self._scenario_repo.diff_scenario(scenario_id, new_data)
+
+    # ==================== Tutorial Administration ====================
+
+    def list_tutorials(self) -> List[TutorialVersion]:
+        return self._tutorial_repo.list_tutorials()
+
+    def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.get_tutorial(tutorial_id, version)
+
+    def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.get_published_tutorial(tutorial_id)
+
+    def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
+        return self._tutorial_repo.get_tutorial_history(tutorial_id)
+
+    def create_tutorial(self, config: Dict[str, Any], created_by: Optional[str] = None) -> TutorialVersion:
+        return self._tutorial_repo.create_tutorial(config, created_by)
+
+    def update_tutorial(self, tutorial_id: str, config: Dict[str, Any], expected_version: int,
+                        created_by: Optional[str] = None) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.update_tutorial(tutorial_id, config, expected_version, created_by)
+
+    def publish_tutorial(self, tutorial_id: str, version: int,
+                         expected_version: int) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.publish_tutorial(tutorial_id, version, expected_version)
+
+    def disable_tutorial(self, tutorial_id: str,
+                         expected_version: int) -> Optional[TutorialVersion]:
+        return self._tutorial_repo.disable_tutorial(tutorial_id, expected_version)

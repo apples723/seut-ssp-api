@@ -45,6 +45,17 @@ from src.service import (
     admin_diff_scenario,
     admin_import_scenario,
     list_scenarios_public,
+    get_tutorial_config,
+    admin_list_tutorials,
+    admin_get_tutorial,
+    admin_get_tutorial_history,
+    admin_create_tutorial,
+    admin_update_tutorial,
+    admin_diff_tutorial,
+    admin_import_tutorial,
+    admin_publish_tutorial,
+    admin_disable_tutorial,
+    admin_activate_tutorial,
     get_session_roles,
     select_role,
     assign_player_role,
@@ -389,6 +400,83 @@ def handle_list_scenarios_public() -> Response:
     if request.method == 'OPTIONS':
         return _flask_response({'statusCode': 200})
     return _flask_response(list_scenarios_public())
+
+
+# ==================== Tutorial Administration Routes ====================
+
+@app.route('/tutorial/config', methods=['GET', 'OPTIONS'])
+def handle_get_tutorial_config() -> Response:
+    if request.method == 'OPTIONS':
+        return _flask_response({'statusCode': 200})
+    params = {'id': request.args['id']} if 'id' in request.args else {}
+    return _flask_response(get_tutorial_config({
+        'queryStringParameters': params
+    }))
+
+
+@app.route('/admin/tutorials', methods=['GET', 'OPTIONS'])
+def handle_admin_list_tutorials() -> Response:
+    if request.method == 'OPTIONS':
+        return _flask_response({'statusCode': 200})
+    return _flask_response(admin_list_tutorials(_build_event()))
+
+
+def _tutorial_admin_response(handler) -> Response:
+    return _flask_response(handler(_build_event(request.get_data(as_text=True))))
+
+
+@app.route('/admin/tutorials/get', methods=['POST', 'OPTIONS'])
+def handle_admin_get_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_get_tutorial)
+
+
+@app.route('/admin/tutorials/history', methods=['POST', 'OPTIONS'])
+def handle_admin_get_tutorial_history() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_get_tutorial_history)
+
+
+@app.route('/admin/tutorials/create', methods=['POST', 'OPTIONS'])
+def handle_admin_create_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_create_tutorial)
+
+
+@app.route('/admin/tutorials/update', methods=['POST', 'OPTIONS'])
+def handle_admin_update_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_update_tutorial)
+
+
+@app.route('/admin/tutorials/diff', methods=['POST', 'OPTIONS'])
+def handle_admin_diff_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_diff_tutorial)
+
+
+@app.route('/admin/tutorials/import', methods=['POST', 'OPTIONS'])
+def handle_admin_import_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_import_tutorial)
+
+
+@app.route('/admin/tutorials/publish', methods=['POST', 'OPTIONS'])
+def handle_admin_publish_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_publish_tutorial)
+
+
+@app.route('/admin/tutorials/activate', methods=['POST', 'OPTIONS'])
+def handle_admin_activate_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_activate_tutorial)
+
+
+@app.route('/admin/tutorials/disable', methods=['POST', 'OPTIONS'])
+def handle_admin_disable_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_disable_tutorial)
 
 
 @app.route('/facilitator/timer', methods=['POST', 'OPTIONS'])

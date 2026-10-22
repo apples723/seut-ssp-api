@@ -32,7 +32,7 @@ from .tutorials import (
     get_tutorial_config, admin_list_tutorials, admin_get_tutorial,
     admin_get_tutorial_history, admin_create_tutorial, admin_update_tutorial,
     admin_diff_tutorial, admin_import_tutorial, admin_publish_tutorial,
-    admin_disable_tutorial,
+    admin_disable_tutorial, admin_activate_tutorial,
 )
 from .present import present_auth
 from .admin import admin_list_sessions, admin_end_session

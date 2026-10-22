@@ -4,9 +4,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from ..repository_factory import repo
 from ..tutorial_repository import (
+    ActiveTutorialDisableError,
     TUTORIAL_MAX_ID_BYTES,
+    TutorialActivationConflictError,
     TutorialAlreadyExistsError,
     TutorialConflictError,
+    TutorialNotActivatableError,
     TutorialValidationError,
     recursive_diff,
     validate_tutorial_config,
@@ -85,6 +88,17 @@ def _integer(body: Dict[str, Any], field: str, required: bool = True) -> Tuple[O
     return value, None
 
 
+def _nonnegative_integer(
+    body: Dict[str, Any], field: str
+) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+    value = body.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None, _field_error(
+            field, "Must be a nonnegative integer.", "nonnegative_integer"
+        )
+    return value, None
+
+
 def _config(body: Dict[str, Any], tutorial_id: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     config = body.get("config")
     try:
@@ -109,22 +123,34 @@ def _conflict(error: TutorialConflictError) -> Dict[str, Any]:
 
 
 def get_tutorial_config(event: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return only the selected published tutorial."""
+    """Return an explicitly requested published tutorial or the active tutorial."""
     event = event or {}
     params = event.get("queryStringParameters") or {}
-    tutorial_id = params.get("id") or "default"
-    if not isinstance(tutorial_id, str) or not tutorial_id.strip():
-        return _field_error("id", "Must be a non-empty string.", "nonempty_string")
-    tutorial_id = tutorial_id.strip()
-    try:
-        tutorial_id_size = len(tutorial_id.encode("utf-8"))
-    except UnicodeEncodeError:
-        return _field_error("id", "Must contain valid Unicode.", "invalid_unicode")
-    if tutorial_id_size > TUTORIAL_MAX_ID_BYTES:
-        return _field_error("id", f"Must be at most {TUTORIAL_MAX_ID_BYTES} UTF-8 bytes.", "max_bytes")
-    if "#" in tutorial_id:
-        return _field_error("id", "Must not contain '#'.", "invalid_id")
+    explicit_id = "id" in params
+    if explicit_id:
+        tutorial_id = params["id"]
+        if not isinstance(tutorial_id, str) or not tutorial_id.strip():
+            return _field_error("id", "Must be a non-empty string.", "nonempty_string")
+        tutorial_id = tutorial_id.strip()
+        try:
+            tutorial_id_size = len(tutorial_id.encode("utf-8"))
+        except UnicodeEncodeError:
+            return _field_error("id", "Must contain valid Unicode.", "invalid_unicode")
+        if tutorial_id_size > TUTORIAL_MAX_ID_BYTES:
+            return _field_error("id", f"Must be at most {TUTORIAL_MAX_ID_BYTES} UTF-8 bytes.", "max_bytes")
+        if "#" in tutorial_id:
+            return _field_error("id", "Must not contain '#'.", "invalid_id")
+    else:
+        tutorial_id = repo.get_tutorial_activation().active_tutorial_id
+        if tutorial_id is None:
+            return response(404, {"ok": False, "message": "Published tutorial not found."})
     tutorial = repo.get_published_tutorial(tutorial_id)
+    if not tutorial and not explicit_id:
+        # Activation and publication are separate records. If a switch completed
+        # between those reads, retry once with the newly selected tutorial.
+        current_id = repo.get_tutorial_activation().active_tutorial_id
+        if current_id is not None and current_id != tutorial_id:
+            tutorial = repo.get_published_tutorial(current_id)
     if not tutorial:
         return response(404, {"ok": False, "message": "Published tutorial not found."})
     return response(200, {"ok": True, "tutorial": tutorial.to_dict()})
@@ -134,7 +160,54 @@ def admin_list_tutorials(event: Dict[str, Any]) -> Dict[str, Any]:
     denied = _admin(event)
     if denied:
         return denied
-    return response(200, {"ok": True, "tutorials": [item.to_dict() for item in repo.list_tutorials()]})
+    activation = repo.get_tutorial_activation()
+    tutorials = []
+    for item in repo.list_tutorials():
+        published = repo.get_published_tutorial(item.id)
+        active = item.id == activation.active_tutorial_id
+        summary = item.to_dict()
+        summary.update({
+            "active": active,
+            "publishedVersion": published.version if published else None,
+            "canActivate": published is not None and not active,
+        })
+        tutorials.append(summary)
+    return response(200, {
+        "ok": True,
+        "tutorials": tutorials,
+        **activation.to_dict(),
+    })
+
+
+def admin_activate_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
+    denied = _admin(event)
+    if denied:
+        return denied
+    body, error = _parse_body(event)
+    if error:
+        return error
+    tutorial_id, error = _tutorial_id(body)
+    if error:
+        return error
+    expected, error = _nonnegative_integer(body, "expectedActivationRevision")
+    if error:
+        return error
+    if not repo.get_tutorial(tutorial_id):
+        return response(404, {"ok": False, "message": "Tutorial not found."})
+    try:
+        activation = repo.activate_tutorial(tutorial_id, expected)
+    except TutorialActivationConflictError as conflict:
+        return response(409, {
+            "ok": False,
+            "message": "expectedActivationRevision is stale.",
+            "currentActivationRevision": conflict.current_activation_revision,
+        })
+    except TutorialNotActivatableError:
+        return response(409, {
+            "ok": False,
+            "message": "Tutorial must be published and enabled before activation.",
+        })
+    return response(200, {"ok": True, **activation.to_dict()})
 
 
 def admin_get_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -331,6 +404,11 @@ def admin_disable_tutorial(event: Dict[str, Any]) -> Dict[str, Any]:
         return error
     try:
         tutorial = repo.disable_tutorial(tutorial_id, expected)
+    except ActiveTutorialDisableError:
+        return response(409, {
+            "ok": False,
+            "message": "Activate another tutorial before disabling the active tutorial.",
+        })
     except TutorialConflictError as conflict:
         return _conflict(conflict)
     if not tutorial:

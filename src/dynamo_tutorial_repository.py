@@ -9,14 +9,19 @@ from botocore.exceptions import ClientError
 
 from .dynamo_helpers import query_all_pages, validate_id, version_sk
 from .tutorial_repository import (
+    ActiveTutorialDisableError,
+    TutorialActivation,
+    TutorialActivationConflictError,
     TutorialAlreadyExistsError,
     TutorialConflictError,
+    TutorialNotActivatableError,
     TutorialVersion,
     serialize_tutorial_config,
 )
 
 GSI_SCENARIOS_LIST = "gsi-scenarios-list"
 GSI_TUTORIALS_VALUE = "ALL_TUTORIALS"
+TUTORIAL_SETTINGS_KEY = {"PK": "TUTORIAL#SETTINGS", "SK": "ACTIVATION"}
 
 
 def tutorial_pk(tutorial_id: str) -> str:
@@ -70,6 +75,91 @@ class DynamoTutorialRepository:
             return None
         tutorial = self.get_tutorial(tutorial_id, int(head["publishedVersion"]))
         return tutorial if tutorial and tutorial.status == "published" else None
+
+    def get_tutorial_activation(self) -> TutorialActivation:
+        response = self._table.get_item(Key=TUTORIAL_SETTINGS_KEY, ConsistentRead=True)
+        item = response.get("Item")
+        if item:
+            return TutorialActivation(
+                item["activeTutorialId"], int(item["activationRevision"])
+            )
+        if self.get_published_tutorial("default"):
+            return TutorialActivation("default", 0)
+        return TutorialActivation(None, 0)
+
+    def activate_tutorial(
+        self, tutorial_id: str, expected_activation_revision: int
+    ) -> TutorialActivation:
+        activation = self.get_tutorial_activation()
+        if activation.activation_revision != expected_activation_revision:
+            raise TutorialActivationConflictError(activation.activation_revision)
+        head = self._get_head(tutorial_id)
+        if (
+            not head
+            or head.get("disabled", False)
+            or head.get("publishedVersion") is None
+        ):
+            raise TutorialNotActivatableError(tutorial_id)
+        published_version = int(head["publishedVersion"])
+        published = self.get_tutorial(tutorial_id, published_version)
+        if not published or published.status != "published":
+            raise TutorialNotActivatableError(tutorial_id)
+        new_revision = expected_activation_revision + 1
+        transactions = [
+            {"ConditionCheck": {
+                "TableName": self._table.table_name,
+                "Key": self._serialize({"PK": tutorial_pk(tutorial_id), "SK": "HEAD"}),
+                "ConditionExpression": (
+                    "attribute_exists(PK) AND disabled = :false "
+                    "AND publishedVersion = :published"
+                ),
+                "ExpressionAttributeValues": self._serialize({
+                    ":false": False,
+                    ":published": published_version,
+                }),
+            }},
+            {"ConditionCheck": {
+                "TableName": self._table.table_name,
+                "Key": self._serialize({
+                    "PK": tutorial_pk(tutorial_id),
+                    "SK": version_sk(published_version),
+                }),
+                "ConditionExpression": "#status = :published_status",
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": self._serialize({
+                    ":published_status": "published",
+                }),
+            }},
+            {"Update": {
+                "TableName": self._table.table_name,
+                "Key": self._serialize(TUTORIAL_SETTINGS_KEY),
+                "UpdateExpression": (
+                    "SET activeTutorialId = :tutorial, activationRevision = :new"
+                ),
+                "ConditionExpression": (
+                    "attribute_not_exists(PK) OR activationRevision = :expected"
+                    if expected_activation_revision == 0
+                    else "activationRevision = :expected"
+                ),
+                "ExpressionAttributeValues": self._serialize({
+                    ":tutorial": tutorial_id,
+                    ":new": new_revision,
+                    ":expected": expected_activation_revision,
+                }),
+            }},
+        ]
+        try:
+            self._client.transact_write_items(TransactItems=transactions)
+        except ClientError as error:
+            if self._is_conditional(error):
+                current = self.get_tutorial_activation()
+                if current.activation_revision != expected_activation_revision:
+                    raise TutorialActivationConflictError(
+                        current.activation_revision
+                    ) from error
+                raise TutorialNotActivatableError(tutorial_id) from error
+            raise
+        return TutorialActivation(tutorial_id, new_revision)
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
         head = self._get_head(tutorial_id)
@@ -220,6 +310,9 @@ class DynamoTutorialRepository:
         return selected
 
     def disable_tutorial(self, tutorial_id: str, expected_revision: int) -> Optional[TutorialVersion]:
+        activation = self.get_tutorial_activation()
+        if activation.active_tutorial_id == tutorial_id:
+            raise ActiveTutorialDisableError(tutorial_id)
         head = self._get_head(tutorial_id)
         if not head:
             return None
@@ -235,6 +328,16 @@ class DynamoTutorialRepository:
         if not selected:
             return None
         transactions = [
+            {"ConditionCheck": {
+                "TableName": self._table.table_name,
+                "Key": self._serialize(TUTORIAL_SETTINGS_KEY),
+                "ConditionExpression": (
+                    "attribute_not_exists(PK) OR activeTutorialId <> :tutorial"
+                ),
+                "ExpressionAttributeValues": self._serialize({
+                    ":tutorial": tutorial_id,
+                }),
+            }},
             {"Update": {
                 "TableName": self._table.table_name,
                 "Key": self._serialize({"PK": tutorial_pk(tutorial_id), "SK": version_sk(published)}),
@@ -259,7 +362,20 @@ class DynamoTutorialRepository:
                 }),
             }},
         ]
-        self._transact_with_conflict(transactions, tutorial_id)
+        try:
+            self._client.transact_write_items(TransactItems=transactions)
+        except ClientError as error:
+            if self._is_conditional(error):
+                current_activation = self.get_tutorial_activation()
+                if current_activation.active_tutorial_id == tutorial_id:
+                    raise ActiveTutorialDisableError(tutorial_id) from error
+                current_head = self._get_head(tutorial_id)
+                current_revision = (
+                    int(current_head.get("revision", current_head["latestVersion"]))
+                    if current_head else 0
+                )
+                raise TutorialConflictError(current_revision) from error
+            raise
         selected.status = "disabled"
         selected.revision = new_revision
         return selected
@@ -283,12 +399,12 @@ class DynamoTutorialRepository:
     @staticmethod
     def _is_conditional(error: ClientError) -> bool:
         code = error.response.get("Error", {}).get("Code")
-        if code == "ConditionalCheckFailedException":
+        if code in ("ConditionalCheckFailedException", "TransactionConflictException"):
             return True
         if code != "TransactionCanceledException":
             return False
         return any(
-            reason.get("Code") == "ConditionalCheckFailed"
+            reason.get("Code") in ("ConditionalCheckFailed", "TransactionConflict")
             for reason in error.response.get("CancellationReasons", [])
         )
 

@@ -55,6 +55,7 @@ from src.service import (
     admin_import_tutorial,
     admin_publish_tutorial,
     admin_disable_tutorial,
+    admin_activate_tutorial,
     get_session_roles,
     select_role,
     assign_player_role,
@@ -407,8 +408,9 @@ def handle_list_scenarios_public() -> Response:
 def handle_get_tutorial_config() -> Response:
     if request.method == 'OPTIONS':
         return _flask_response({'statusCode': 200})
+    params = {'id': request.args['id']} if 'id' in request.args else {}
     return _flask_response(get_tutorial_config({
-        'queryStringParameters': {'id': request.args.get('id', 'default')}
+        'queryStringParameters': params
     }))
 
 
@@ -463,6 +465,12 @@ def handle_admin_import_tutorial() -> Response:
 def handle_admin_publish_tutorial() -> Response:
     if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
     return _tutorial_admin_response(admin_publish_tutorial)
+
+
+@app.route('/admin/tutorials/activate', methods=['POST', 'OPTIONS'])
+def handle_admin_activate_tutorial() -> Response:
+    if request.method == 'OPTIONS': return _flask_response({'statusCode': 200})
+    return _tutorial_admin_response(admin_activate_tutorial)
 
 
 @app.route('/admin/tutorials/disable', methods=['POST', 'OPTIONS'])

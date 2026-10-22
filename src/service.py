@@ -70,6 +70,7 @@ from .services import (
     admin_import_tutorial,
     admin_publish_tutorial,
     admin_disable_tutorial,
+    admin_activate_tutorial,
     # Present
     present_auth,
     # Admin

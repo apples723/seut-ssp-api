@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .models import Session, Participant, ResponseItem, Sprint, ChatMessage, Vote, VoterInfo, VoterType, SprintQuestion, HeadToHead, RolePin
 from .scenario_repository import ScenarioRepository, ScenarioVersion, load_scenario_from_file, parse_sprints_from_scenario
-from .tutorial_repository import TutorialRepository, TutorialVersion
+from .tutorial_repository import TutorialActivation, TutorialRepository, TutorialVersion
 from .voting_repository import VotingRepository
 
 
@@ -2139,6 +2139,13 @@ class SqliteRepository:
 
     def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
         return self.tutorials.get_published_tutorial(tutorial_id)
+
+    def get_tutorial_activation(self) -> TutorialActivation:
+        return self.tutorials.get_tutorial_activation()
+
+    def activate_tutorial(self, tutorial_id: str,
+                          expected_activation_revision: int) -> TutorialActivation:
+        return self.tutorials.activate_tutorial(tutorial_id, expected_activation_revision)
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
         return self.tutorials.get_tutorial_history(tutorial_id)

@@ -41,8 +41,38 @@ class TutorialConflictError(RuntimeError):
         self.current_revision = current_revision
 
 
+class TutorialActivationConflictError(RuntimeError):
+    def __init__(self, current_activation_revision: int):
+        super().__init__("The active tutorial was changed by another request.")
+        self.current_activation_revision = current_activation_revision
+
+
+class ActiveTutorialDisableError(RuntimeError):
+    def __init__(self, tutorial_id: str):
+        super().__init__("Activate another tutorial before disabling the active tutorial.")
+        self.tutorial_id = tutorial_id
+
+
+class TutorialNotActivatableError(RuntimeError):
+    def __init__(self, tutorial_id: str):
+        super().__init__("The tutorial must be published and enabled before activation.")
+        self.tutorial_id = tutorial_id
+
+
 class TutorialAlreadyExistsError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class TutorialActivation:
+    active_tutorial_id: Optional[str]
+    activation_revision: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "activeTutorialId": self.active_tutorial_id,
+            "activationRevision": self.activation_revision,
+        }
 
 
 @dataclass
@@ -291,6 +321,11 @@ class TutorialRepository:
                 disabled INTEGER NOT NULL DEFAULT 0,
                 revision INTEGER NOT NULL DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS tutorial_settings (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                active_tutorial_id TEXT NOT NULL,
+                activation_revision INTEGER NOT NULL CHECK(activation_revision >= 0)
+            );
             CREATE INDEX IF NOT EXISTS idx_tutorial_versions_status
                 ON tutorial_versions(id, status, version DESC);
         """)
@@ -340,6 +375,59 @@ class TutorialRepository:
             WHERE h.id = ? AND h.disabled = 0 AND v.status = 'published'
         """, (tutorial_id,)).fetchone()
         return self._row_to_version(row) if row else None
+
+    def get_tutorial_activation(self) -> TutorialActivation:
+        """Return the explicit selector, or the migration-compatible default."""
+        row = self.conn.execute("""
+            SELECT active_tutorial_id, activation_revision
+            FROM tutorial_settings WHERE singleton = 1
+            UNION ALL
+            SELECT 'default', 0
+            WHERE NOT EXISTS (SELECT 1 FROM tutorial_settings WHERE singleton = 1)
+              AND EXISTS (
+                  SELECT 1 FROM tutorial_heads h
+                  JOIN tutorial_versions v
+                    ON v.id = h.id AND v.version = h.published_version
+                  WHERE h.id = 'default' AND h.disabled = 0
+                    AND v.status = 'published'
+              )
+            LIMIT 1
+        """).fetchone()
+        if not row:
+            return TutorialActivation(None, 0)
+        return TutorialActivation(row["active_tutorial_id"], int(row["activation_revision"]))
+
+    def activate_tutorial(
+        self, tutorial_id: str, expected_activation_revision: int
+    ) -> TutorialActivation:
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                activation = self._get_activation_in_transaction()
+                if activation.activation_revision != expected_activation_revision:
+                    raise TutorialActivationConflictError(activation.activation_revision)
+                published = self.conn.execute("""
+                    SELECT 1 FROM tutorial_heads h
+                    JOIN tutorial_versions v
+                      ON v.id = h.id AND v.version = h.published_version
+                    WHERE h.id = ? AND h.disabled = 0 AND v.status = 'published'
+                """, (tutorial_id,)).fetchone()
+                if not published:
+                    raise TutorialNotActivatableError(tutorial_id)
+                new_revision = expected_activation_revision + 1
+                self.conn.execute("""
+                    INSERT INTO tutorial_settings
+                        (singleton, active_tutorial_id, activation_revision)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(singleton) DO UPDATE SET
+                        active_tutorial_id = excluded.active_tutorial_id,
+                        activation_revision = excluded.activation_revision
+                """, (tutorial_id, new_revision))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return TutorialActivation(tutorial_id, new_revision)
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
         rows = self.conn.execute("""
@@ -471,6 +559,9 @@ class TutorialRepository:
         with self._lock:
             try:
                 self.conn.execute("BEGIN IMMEDIATE")
+                activation = self._get_activation_in_transaction()
+                if activation.active_tutorial_id == tutorial_id:
+                    raise ActiveTutorialDisableError(tutorial_id)
                 head = self.conn.execute("SELECT * FROM tutorial_heads WHERE id = ?", (tutorial_id,)).fetchone()
                 if not head:
                     self.conn.rollback()
@@ -504,6 +595,10 @@ class TutorialRepository:
             row["created_at"], row["created_by"], row["published_at"],
             revision=new_revision,
         )
+
+    def _get_activation_in_transaction(self) -> TutorialActivation:
+        """Read activation on the current SQLite transaction snapshot."""
+        return self.get_tutorial_activation()
 
     @staticmethod
     def _row_to_version(row: sqlite3.Row) -> TutorialVersion:

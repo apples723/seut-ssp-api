@@ -33,7 +33,7 @@ from .models import (
     HeadToHead,
 )
 from .scenario_repository import ScenarioVersion
-from .tutorial_repository import TutorialVersion
+from .tutorial_repository import TutorialActivation, TutorialVersion
 from .dynamo_scenario_repository import DynamoScenarioRepository
 from .dynamo_tutorial_repository import DynamoTutorialRepository
 from .dynamo_helpers import (
@@ -2224,6 +2224,13 @@ class DynamoRepository:
 
     def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]:
         return self._tutorial_repo.get_published_tutorial(tutorial_id)
+
+    def get_tutorial_activation(self) -> TutorialActivation:
+        return self._tutorial_repo.get_tutorial_activation()
+
+    def activate_tutorial(self, tutorial_id: str,
+                          expected_activation_revision: int) -> TutorialActivation:
+        return self._tutorial_repo.activate_tutorial(tutorial_id, expected_activation_revision)
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]:
         return self._tutorial_repo.get_tutorial_history(tutorial_id)

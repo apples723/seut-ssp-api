@@ -16,7 +16,7 @@ from .models import (
     Sprint,
 )
 from .scenario_repository import ScenarioVersion
-from .tutorial_repository import TutorialVersion
+from .tutorial_repository import TutorialActivation, TutorialVersion
 
 
 class RepositoryProtocol(Protocol):
@@ -402,6 +402,11 @@ class RepositoryProtocol(Protocol):
     def get_tutorial(self, tutorial_id: str, version: Optional[int] = None) -> Optional[TutorialVersion]: ...
 
     def get_published_tutorial(self, tutorial_id: str) -> Optional[TutorialVersion]: ...
+
+    def get_tutorial_activation(self) -> TutorialActivation: ...
+
+    def activate_tutorial(self, tutorial_id: str,
+                          expected_activation_revision: int) -> TutorialActivation: ...
 
     def get_tutorial_history(self, tutorial_id: str) -> List[TutorialVersion]: ...
 

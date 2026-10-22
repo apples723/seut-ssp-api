@@ -48,6 +48,7 @@ from src.service import (
     admin_import_tutorial,
     admin_publish_tutorial,
     admin_disable_tutorial,
+    admin_activate_tutorial,
     get_session_roles,
     select_role,
     assign_player_role,
@@ -100,7 +101,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        query = parse_qs(parsed.query)
+        query = parse_qs(parsed.query, keep_blank_values=True)
 
         if path == '/session':
             code = query.get('code', [None])[0]
@@ -149,8 +150,9 @@ class APIHandler(BaseHTTPRequestHandler):
         elif path == '/admin/tutorials':
             self._send_response(admin_list_tutorials(self._build_event()))
         elif path == '/tutorial/config':
+            params = {'id': query['id'][0]} if 'id' in query else {}
             self._send_response(get_tutorial_config({
-                'queryStringParameters': {'id': query.get('id', ['default'])[0]}
+                'queryStringParameters': params
             }))
         elif path == '/scenarios':
             self._send_response(list_scenarios_public())
@@ -384,6 +386,8 @@ class APIHandler(BaseHTTPRequestHandler):
             result = admin_import_tutorial(event)
         elif path == '/admin/tutorials/publish':
             result = admin_publish_tutorial(event)
+        elif path == '/admin/tutorials/activate':
+            result = admin_activate_tutorial(event)
         elif path == '/admin/tutorials/disable':
             result = admin_disable_tutorial(event)
         elif path == '/session/select-role':
